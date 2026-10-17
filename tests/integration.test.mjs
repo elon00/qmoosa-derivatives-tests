@@ -8,7 +8,7 @@ import {
   calculateEquity,
   isLiquidatable
 } from "@qmoosa/derivatives-protocol";
-import { DerivativesEngine } from "@qmoosa/derivatives-engine";
+import { DerivativesEngine, FUNDING_INTERVAL_MS } from "@qmoosa/derivatives-engine";
 import { QmoosaDerivativesClient } from "@qmoosa/derivatives-sdk";
 
 test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlement)", () => {
@@ -26,6 +26,7 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
   });
 
   const position = engine.openPosition({
+    caller: openPayload.sender,
     account: openPayload.sender,
     symbol: openPayload.symbol,
     isLong: openPayload.isLong,
@@ -47,15 +48,21 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
     positionId: position.id
   });
 
-  const receipt = engine.closePosition(closePayload.positionId);
+  // Engine executes authorized closePosition
+  const receipt = engine.closePosition({
+    caller: closePayload.sender,
+    positionId: closePayload.positionId
+  });
+
   assert.equal(receipt.realizedPnl, 600n * WAD); // 2 ETH * $300 profit = +$600
   assert.equal(receipt.finalPayout, 1200n * WAD); // $600 collateral + $600 profit
   assert.equal(engine.listPositions().length, 0);
 });
 
-test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement", () => {
+test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and Insurance Balance", () => {
+  const startTime = 1_000_000_000_000;
   const engine = new DerivativesEngine();
-  engine.registerMarket("BTC-USD", 60000n * WAD);
+  engine.registerMarket("BTC-USD", 60000n * WAD, 500n, 100_000n * WAD, startTime);
 
   const client = new QmoosaDerivativesClient();
   const openPayload = client.buildOpenPositionPayload({
@@ -68,6 +75,7 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement", (
   });
 
   const position = engine.openPosition({
+    caller: openPayload.sender,
     account: openPayload.sender,
     symbol: openPayload.symbol,
     isLong: openPayload.isLong,
@@ -81,16 +89,20 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement", (
   const market = engine.getMarket("BTC-USD");
   assert.equal(market.fundingRateBps, 100n);
 
-  // Settle funding cycle
-  const settlement = engine.settleFunding("BTC-USD");
+  // Settle funding cycle after full 8 hours
+  const settlement = engine.settleFunding("BTC-USD", startTime + FUNDING_INTERVAL_MS);
+  assert.equal(settlement.status, "SETTLED");
   assert.equal(settlement.settledPositions, 1);
 
   // In positive funding, short receives payment (accruedFunding becomes negative = credit)
   const updatedPos = engine.getPosition(position.id);
   assert.ok(updatedPos.accruedFunding < 0n);
 
-  // Close position
-  const receipt = engine.closePosition(position.id);
+  // Close position with authorization
+  const receipt = engine.closePosition({
+    caller: "0xBob",
+    positionId: position.id
+  });
   // Payout includes original collateral minus slight price change plus funding credit
   assert.ok(receipt.finalPayout > 0n);
 });
@@ -111,6 +123,7 @@ test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () =>
   });
 
   const position = engine.openPosition({
+    caller: openPayload.sender,
     account: openPayload.sender,
     symbol: openPayload.symbol,
     isLong: openPayload.isLong,
@@ -119,9 +132,7 @@ test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () =>
     leverage: openPayload.leverage
   });
 
-  // Price drops by 4.5% to $191.00
-  // Notional is $1,910, loss is $90. Equity is $10.
-  // Maintenance margin (5%) = $95.50 > $10 -> Breached!
+  // Price drops by 4.5% to $191.00 -> triggers liquidation
   engine.updatePrices("SOL-USD", 191n * WAD, 191n * WAD);
 
   // SDK builds liquidate payload

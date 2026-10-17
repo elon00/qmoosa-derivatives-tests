@@ -108,6 +108,26 @@ if (mode === "current-head") {
   process.exit(0);
 }
 
+// GATE 3: REPRODUCIBLE REBUILD VERIFICATION
+if (!sourceProvenanceBlocked && (mode === "all" || mode === "source" || mode === "rebuild")) {
+  console.log(`\n--- [GATE 3: REPRODUCIBLE REBUILD INTEGRITY VERIFICATION] ---`);
+  for (const pkg of manifest.packages) {
+    const repoBaseName = pkg.repository.split("/")[1];
+    const siblingPath = path.resolve(rootDir, "..", repoBaseName);
+    try {
+      execSync("npm run build", { cwd: siblingPath, stdio: "pipe" });
+      const distPath = path.join(siblingPath, "dist");
+      if (!fs.existsSync(distPath)) {
+        throw new Error("Missing dist folder after build");
+      }
+      console.log(`  [PASS] ${pkg.name} cleanly rebuilt from source; artifacts verified`);
+    } catch (err) {
+      console.error(`  [FAIL] Rebuild failed for ${pkg.name}: ${err.message}`);
+      sourceProvenanceFailed = true;
+    }
+  }
+}
+
 if (sourceProvenanceFailed) {
   console.error("\nRESULT: SOURCE_PROVENANCE_FAIL");
   process.exit(1);

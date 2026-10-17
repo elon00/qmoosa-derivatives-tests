@@ -77,3 +77,50 @@ test("Negative Control 4: Unconfigured SDK adapter fails closed with zero manufa
     /No chain adapter configured/
   );
 });
+
+test("Negative Control 5: Unauthorized position closure by non-owner fails closed", () => {
+  const engine = new DerivativesEngine();
+  engine.registerMarket("ETH-USD", 3000n * WAD);
+
+  const pos = engine.openPosition({
+    account: "0xRealOwner",
+    symbol: "ETH-USD",
+    isLong: true,
+    size: 1n * WAD,
+    collateral: 500n * WAD,
+    leverage: 6n
+  });
+
+  // Malicious closure attempt by unapproved actor
+  assert.throws(
+    () => engine.closePosition({ caller: "0xImpersonator", positionId: pos.id }),
+    /Unauthorized: caller 0xImpersonator is not authorized/
+  );
+
+  // Position remains intact
+  assert.equal(engine.listPositions().length, 1);
+});
+
+test("Negative Control 6: Premature duplicate funding settlement does not double-charge traders", () => {
+  const startTime = 1_000_000_000_000;
+  const engine = new DerivativesEngine();
+  engine.registerMarket("ETH-USD", 3000n * WAD, 500n, 0n, startTime);
+
+  engine.openPosition({
+    account: "0xTrader",
+    symbol: "ETH-USD",
+    isLong: true,
+    size: 1n * WAD,
+    collateral: 300n * WAD,
+    leverage: 10n
+  });
+
+  // Premature settlement attempt after only 5 minutes
+  const res = engine.settleFunding("ETH-USD", startTime + (5 * 60 * 1000));
+  assert.equal(res.status, "SKIPPED_INTERVAL_NOT_ELAPSED");
+  assert.equal(res.settledPositions, 0);
+
+  // Accrued funding remains 0
+  const pos = engine.listPositions()[0];
+  assert.equal(pos.accruedFunding, 0n);
+});
