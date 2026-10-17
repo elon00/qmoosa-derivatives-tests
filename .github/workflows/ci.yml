@@ -19,21 +19,21 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: elon00/qmoosa-derivatives-protocol
-          ref: da83414
+          ref: main
           path: qmoosa-derivatives-protocol
 
       - name: Checkout engine repository
         uses: actions/checkout@v4
         with:
           repository: elon00/qmoosa-derivatives-engine
-          ref: 3be4705
+          ref: main
           path: qmoosa-derivatives-engine
 
       - name: Checkout sdk repository
         uses: actions/checkout@v4
         with:
           repository: elon00/qmoosa-derivatives-sdk
-          ref: 753f70a
+          ref: main
           path: qmoosa-derivatives-sdk
 
       - name: Setup Node.js
