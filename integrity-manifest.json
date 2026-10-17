@@ -1,0 +1,30 @@
+{
+  "mission": "QMOOSA-DERIVATIVES-01",
+  "generatedAt": "2026-10-17T20:15:00Z",
+  "packages": [
+    {
+      "name": "@qmoosa/derivatives-protocol",
+      "version": "1.0.0",
+      "archivePath": "packages/qmoosa-derivatives-protocol-1.0.0.tgz",
+      "sha256": "caa60db67d10fa2b7f4e3b6170bbfc97bdada1fc64d86132fc30456b06e0b19d",
+      "repository": "elon00/qmoosa-derivatives-protocol",
+      "sourceCommit": "77e61d9"
+    },
+    {
+      "name": "@qmoosa/derivatives-engine",
+      "version": "1.0.0",
+      "archivePath": "packages/qmoosa-derivatives-engine-1.0.0.tgz",
+      "sha256": "178a90b65f6ab3aa35ab9d29c64fdca5240d6680529af4a2a0fb86b7f6d532a5",
+      "repository": "elon00/qmoosa-derivatives-engine",
+      "sourceCommit": "d0a4726"
+    },
+    {
+      "name": "@qmoosa/derivatives-sdk",
+      "version": "1.0.0",
+      "archivePath": "packages/qmoosa-derivatives-sdk-1.0.0.tgz",
+      "sha256": "2e7a61100486bf2c10596b2ba51f657577c168718086794c009dfa06240cc353",
+      "repository": "elon00/qmoosa-derivatives-sdk",
+      "sourceCommit": "753f70a"
+    }
+  ]
+}

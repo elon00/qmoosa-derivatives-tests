@@ -1,0 +1,38 @@
+name: Full-Spectrum Derivatives Reality Gates & Invariant CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  reality-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tests repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies with strict lockfile
+        run: npm install
+
+      - name: Run Source & Package Integrity Gate (Archive Mode)
+        run: npm run verify:archive
+
+      - name: Run Source & Package Integrity Gate (Full Gate)
+        run: npm run test:integrity
+
+      - name: Run Real Cross-Repository Integration Suite
+        run: npm run test:integration
+
+      - name: Run Negative Control & Adversarial Defense Suite
+        run: npm run test:negative
+
+      - name: Run Static Syntax & Lint Verification
+        run: npm run lint
