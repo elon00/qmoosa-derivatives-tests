@@ -26,14 +26,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: elon00/qmoosa-derivatives-engine
-          ref: 090849ea56f23174fc43bf34a67525d272f8914c
+          ref: 40d2ba23fcd044c2ecef08638fe98c49b726c2f6
           path: qmoosa-derivatives-engine
 
       - name: Checkout sdk repository (Pinned Commit)
         uses: actions/checkout@v4
         with:
           repository: elon00/qmoosa-derivatives-sdk
-          ref: f8c8645cdc504269c1aedb8b38bbdd0ba26c87a9
+          ref: d9df614c1e4589243c35ad9cd84325f7c3cd9e6a
           path: qmoosa-derivatives-sdk
 
       - name: Setup Node.js

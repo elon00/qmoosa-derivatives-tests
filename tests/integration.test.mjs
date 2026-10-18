@@ -23,6 +23,20 @@ function createIntegratedEngine() {
   });
 }
 
+function enrollClientUser(client, engine) {
+  const account = QmoosaDerivativesClient.generateAccountKeyPair();
+  const operational = QmoosaDerivativesClient.generateKeyPair();
+  const proof = client.createEnrollmentProof(
+    account.address,
+    account.publicKey,
+    account.privateKey,
+    operational.publicKey,
+    operational.privateKey
+  );
+  engine.auth.enrollAccount(proof);
+  return { account, operational, address: account.address };
+}
+
 function registerMarket(engine, symbol, initialPrice, insurance = 100_000n * WAD, timestamp = 0) {
   const intent = engine.auth.signPrivilegedIntent(
     engine.domain,
@@ -53,22 +67,18 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
   registerMarket(engine, "ETH-USD", 3000n * WAD);
 
   const client = new QmoosaDerivativesClient();
-  const aliceKeys = QmoosaDerivativesClient.generateKeyPair();
-
-  // Verifiable account enrollment with asymmetric ownership proof
-  const proof = client.createEnrollmentProof("0xAlice", aliceKeys.publicKey, aliceKeys.privateKey);
-  engine.auth.enrollAccount(proof);
+  const alice = enrollClientUser(client, engine);
 
   // Build open payload with SDK, supplying Ed25519 privateKey to generate domain-bound SignedIntent
   const openPayload = client.buildOpenPositionPayload({
-    account: "0xAlice",
+    account: alice.address,
     symbol: "ETH-USD",
     isLong: true,
     size: 2n * WAD,
     collateral: 600n * WAD, // 10x leverage on $6,000 notional
     leverage: 10n,
     nonce: 1n,
-    privateKey: aliceKeys.privateKey
+    privateKey: alice.operational.privateKey
   });
 
   assert.ok(openPayload.signedIntent, "SDK must generate signed intent");
@@ -82,7 +92,7 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
     leverage: openPayload.leverage
   });
 
-  assert.equal(position.account, "0xalice");
+  assert.equal(position.account, alice.address.toLowerCase());
   assert.equal(position.size, 2n * WAD);
   assert.equal(position.collateral, 600n * WAD);
 
@@ -98,10 +108,10 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
 
   // Build close payload with SDK
   const closePayload = client.buildClosePositionPayload({
-    account: "0xAlice",
+    account: alice.address,
     positionId: position.id,
     nonce: 2n,
-    privateKey: aliceKeys.privateKey
+    privateKey: alice.operational.privateKey
   });
 
   assert.ok(closePayload.signedIntent, "SDK must generate signed intent for position closure");
@@ -123,18 +133,17 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and
   registerMarket(engine, "BTC-USD", 60000n * WAD, 100_000n * WAD, startTime);
 
   const client = new QmoosaDerivativesClient();
-  const bobKeys = QmoosaDerivativesClient.generateKeyPair();
-  engine.auth.enrollAccount(client.createEnrollmentProof("0xBob", bobKeys.publicKey, bobKeys.privateKey));
+  const bob = enrollClientUser(client, engine);
 
   const openPayload = client.buildOpenPositionPayload({
-    account: "0xBob",
+    account: bob.address,
     symbol: "BTC-USD",
     isLong: false,
     size: 1n * WAD,
     collateral: 6000n * WAD, // 10x leverage on $60,000 notional
     leverage: 10n,
     nonce: 1n,
-    privateKey: bobKeys.privateKey
+    privateKey: bob.operational.privateKey
   });
 
   const position = engine.openPosition({
@@ -181,10 +190,10 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and
 
   // Close position with authorization
   const closePayload = client.buildClosePositionPayload({
-    account: "0xBob",
+    account: bob.address,
     positionId: position.id,
     nonce: 2n,
-    privateKey: bobKeys.privateKey
+    privateKey: bob.operational.privateKey
   });
 
   const receipt = engine.closePosition({
@@ -199,19 +208,18 @@ test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () =>
   registerMarket(engine, "SOL-USD", 200n * WAD);
 
   const client = new QmoosaDerivativesClient();
-  const charlieKeys = QmoosaDerivativesClient.generateKeyPair();
-  engine.auth.enrollAccount(client.createEnrollmentProof("0xCharlie", charlieKeys.publicKey, charlieKeys.privateKey));
+  const charlie = enrollClientUser(client, engine);
 
   // Max leverage 20x: 10 SOL at $200 = $2,000 notional. Collateral = $100
   const openPayload = client.buildOpenPositionPayload({
-    account: "0xCharlie",
+    account: charlie.address,
     symbol: "SOL-USD",
     isLong: true,
     size: 10n * WAD,
     collateral: 100n * WAD,
     leverage: 20n,
     nonce: 1n,
-    privateKey: charlieKeys.privateKey
+    privateKey: charlie.operational.privateKey
   });
 
   const position = engine.openPosition({
@@ -244,7 +252,7 @@ test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () =>
     liquidator: liqPayload.liquidator
   });
   assert.equal(receipt.liquidator, "0xliquidatoragent");
-  assert.equal(receipt.liquidatedAccount, "0xcharlie");
+  assert.equal(receipt.liquidatedAccount, charlie.address.toLowerCase());
   assert.equal(receipt.liquidationPrice, 191n * WAD);
   assert.equal(engine.listPositions().length, 0);
 });
