@@ -8,18 +8,12 @@ import {
   calculateEquity,
   isLiquidatable
 } from "@qmoosa/derivatives-protocol";
-import { DerivativesEngine, DeterministicClock, FUNDING_INTERVAL_MS } from "@qmoosa/derivatives-engine";
+import { DerivativesEngine, FUNDING_INTERVAL_MS } from "@qmoosa/derivatives-engine";
 import { QmoosaDerivativesClient } from "@qmoosa/derivatives-sdk";
-
-const ADMIN_AUTH = { actor: "0xAdmin", role: "ADMIN" };
-const ALICE_AUTH = { actor: "0xAlice", role: "USER" };
-const BOB_AUTH = { actor: "0xBob", role: "USER" };
-const CHARLIE_AUTH = { actor: "0xCharlie", role: "USER" };
-const LIQ_AUTH = { actor: "0xLiquidatorAgent", role: "OPERATOR" };
 
 test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlement)", () => {
   const engine = new DerivativesEngine();
-  engine.registerMarket(ADMIN_AUTH, "ETH-USD", 3000n * WAD);
+  engine.registerMarket("ETH-USD", 3000n * WAD);
 
   const client = new QmoosaDerivativesClient();
   const openPayload = client.buildOpenPositionPayload({
@@ -31,7 +25,8 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
     leverage: 10n
   });
 
-  const position = engine.openPosition(ALICE_AUTH, {
+  const position = engine.openPosition({
+    caller: openPayload.sender,
     account: openPayload.sender,
     symbol: openPayload.symbol,
     isLong: openPayload.isLong,
@@ -45,7 +40,7 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
   assert.equal(position.collateral, 600n * WAD);
 
   // Market rallies to $3300 (+10% gain)
-  engine.updatePrices(ADMIN_AUTH, "ETH-USD", 3300n * WAD, 3300n * WAD);
+  engine.updatePrices("ETH-USD", 3300n * WAD, 3300n * WAD);
 
   // Build close payload with SDK
   const closePayload = client.buildClosePositionPayload({
@@ -54,7 +49,10 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
   });
 
   // Engine executes authorized closePosition
-  const receipt = engine.closePosition(ALICE_AUTH, closePayload.positionId);
+  const receipt = engine.closePosition({
+    caller: closePayload.sender,
+    positionId: closePayload.positionId
+  });
 
   assert.equal(receipt.realizedPnl, 600n * WAD); // 2 ETH * $300 profit = +$600
   assert.equal(receipt.finalPayout, 1200n * WAD); // $600 collateral + $600 profit
@@ -62,9 +60,9 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
 });
 
 test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and Insurance Balance", () => {
-  const clock = new DeterministicClock(1_700_000_000_000);
-  const engine = new DerivativesEngine(clock);
-  engine.registerMarket(ADMIN_AUTH, "BTC-USD", 60000n * WAD, 500n, 100_000n * WAD);
+  const startTime = 1_000_000_000_000;
+  const engine = new DerivativesEngine();
+  engine.registerMarket("BTC-USD", 60000n * WAD, 500n, 100_000n * WAD, startTime);
 
   const client = new QmoosaDerivativesClient();
   const openPayload = client.buildOpenPositionPayload({
@@ -76,7 +74,8 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and
     leverage: 10n
   });
 
-  const position = engine.openPosition(BOB_AUTH, {
+  const position = engine.openPosition({
+    caller: openPayload.sender,
     account: openPayload.sender,
     symbol: openPayload.symbol,
     isLong: openPayload.isLong,
@@ -86,15 +85,12 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and
   });
 
   // Mark price trades above Index ($60600 vs $60000 = +100 bps premium)
-  engine.updatePrices(ADMIN_AUTH, "BTC-USD", 60600n * WAD, 60000n * WAD);
+  engine.updatePrices("BTC-USD", 60600n * WAD, 60000n * WAD);
   const market = engine.getMarket("BTC-USD");
   assert.equal(market.fundingRateBps, 100n);
 
-  // Advance clock by full 8-hour epoch
-  clock.advance(FUNDING_INTERVAL_MS + 1000);
-
-  // Settle funding cycle
-  const settlement = engine.settleFunding("BTC-USD");
+  // Settle funding cycle after full 8 hours
+  const settlement = engine.settleFunding("BTC-USD", startTime + FUNDING_INTERVAL_MS);
   assert.equal(settlement.status, "SETTLED");
   assert.equal(settlement.settledPositions, 1);
 
@@ -103,14 +99,17 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and
   assert.ok(updatedPos.accruedFunding < 0n);
 
   // Close position with authorization
-  const receipt = engine.closePosition(BOB_AUTH, position.id);
+  const receipt = engine.closePosition({
+    caller: "0xBob",
+    positionId: position.id
+  });
   // Payout includes original collateral minus slight price change plus funding credit
   assert.ok(receipt.finalPayout > 0n);
 });
 
 test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () => {
   const engine = new DerivativesEngine();
-  engine.registerMarket(ADMIN_AUTH, "SOL-USD", 200n * WAD);
+  engine.registerMarket("SOL-USD", 200n * WAD);
 
   const client = new QmoosaDerivativesClient();
   // Max leverage 20x: 10 SOL at $200 = $2,000 notional. Collateral = $100
@@ -123,7 +122,8 @@ test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () =>
     leverage: 20n
   });
 
-  const position = engine.openPosition(CHARLIE_AUTH, {
+  const position = engine.openPosition({
+    caller: openPayload.sender,
     account: openPayload.sender,
     symbol: openPayload.symbol,
     isLong: openPayload.isLong,
@@ -133,7 +133,7 @@ test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () =>
   });
 
   // Price drops by 4.5% to $191.00 -> triggers liquidation
-  engine.updatePrices(ADMIN_AUTH, "SOL-USD", 191n * WAD, 191n * WAD);
+  engine.updatePrices("SOL-USD", 191n * WAD, 191n * WAD);
 
   // SDK builds liquidate payload
   const liqPayload = client.buildLiquidatePayload({
@@ -141,7 +141,7 @@ test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () =>
     positionId: position.id
   });
 
-  const receipt = engine.liquidatePosition(LIQ_AUTH, liqPayload.positionId);
+  const receipt = engine.liquidatePosition(liqPayload.positionId, liqPayload.liquidator);
   assert.equal(receipt.liquidator, "0xLiquidatorAgent");
   assert.equal(receipt.liquidatedAccount, "0xCharlie");
   assert.equal(receipt.liquidationPrice, 191n * WAD);

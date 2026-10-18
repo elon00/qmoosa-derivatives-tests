@@ -1,17 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { WAD } from "@qmoosa/derivatives-protocol";
-import { DerivativesEngine, DeterministicClock } from "@qmoosa/derivatives-engine";
+import { DerivativesEngine } from "@qmoosa/derivatives-engine";
 import { QmoosaDerivativesClient } from "@qmoosa/derivatives-sdk";
-
-const ADMIN_AUTH = { actor: "0xAdmin", role: "ADMIN" };
-const USER_AUTH = { actor: "0xUser", role: "USER" };
-const ATTACKER_AUTH = { actor: "0xAttacker", role: "USER" };
 
 test("Negative Control 1: Over-leverage attempt (>20x) strictly rejected across SDK and Engine", () => {
   const client = new QmoosaDerivativesClient();
   const engine = new DerivativesEngine();
-  engine.registerMarket(ADMIN_AUTH, "ETH-USD", 3000n * WAD);
+  engine.registerMarket("ETH-USD", 3000n * WAD);
 
   // SDK rejection
   assert.throws(() => {
@@ -27,7 +23,7 @@ test("Negative Control 1: Over-leverage attempt (>20x) strictly rejected across 
 
   // Engine direct rejection
   assert.throws(() => {
-    engine.openPosition(ATTACKER_AUTH, {
+    engine.openPosition({
       account: "0xAttacker",
       symbol: "ETH-USD",
       isLong: true,
@@ -40,10 +36,10 @@ test("Negative Control 1: Over-leverage attempt (>20x) strictly rejected across 
 
 test("Negative Control 2: Premature liquidation of healthy position fails closed", () => {
   const engine = new DerivativesEngine();
-  engine.registerMarket(ADMIN_AUTH, "ETH-USD", 3000n * WAD);
+  engine.registerMarket("ETH-USD", 3000n * WAD);
 
-  const pos = engine.openPosition(USER_AUTH, {
-    account: "0xUser",
+  const pos = engine.openPosition({
+    account: "0xHonestUser",
     symbol: "ETH-USD",
     isLong: true,
     size: 1n * WAD,
@@ -53,7 +49,7 @@ test("Negative Control 2: Premature liquidation of healthy position fails closed
 
   // Malicious liquidation attempt
   assert.throws(() => {
-    engine.liquidatePosition(ATTACKER_AUTH, pos.id);
+    engine.liquidatePosition(pos.id, "0xPredator");
   }, /is healthy and cannot be liquidated/);
 
   // Position remains untouched
@@ -62,10 +58,10 @@ test("Negative Control 2: Premature liquidation of healthy position fails closed
 
 test("Negative Control 3: Liquidating non-existent position fails closed", () => {
   const engine = new DerivativesEngine();
-  engine.registerMarket(ADMIN_AUTH, "ETH-USD", 3000n * WAD);
+  engine.registerMarket("ETH-USD", 3000n * WAD);
 
   assert.throws(() => {
-    engine.liquidatePosition(ATTACKER_AUTH, "POS-NONEXISTENT-999");
+    engine.liquidatePosition("POS-NONEXISTENT-999", "0xPredator");
   }, /not found/);
 });
 
@@ -84,10 +80,10 @@ test("Negative Control 4: Unconfigured SDK adapter fails closed with zero manufa
 
 test("Negative Control 5: Unauthorized position closure by non-owner fails closed", () => {
   const engine = new DerivativesEngine();
-  engine.registerMarket(ADMIN_AUTH, "ETH-USD", 3000n * WAD);
+  engine.registerMarket("ETH-USD", 3000n * WAD);
 
-  const pos = engine.openPosition(USER_AUTH, {
-    account: "0xUser",
+  const pos = engine.openPosition({
+    account: "0xRealOwner",
     symbol: "ETH-USD",
     isLong: true,
     size: 1n * WAD,
@@ -97,21 +93,21 @@ test("Negative Control 5: Unauthorized position closure by non-owner fails close
 
   // Malicious closure attempt by unapproved actor
   assert.throws(
-    () => engine.closePosition(ATTACKER_AUTH, pos.id),
-    /Unauthorized: actor 0xAttacker cannot close position/
+    () => engine.closePosition({ caller: "0xImpersonator", positionId: pos.id }),
+    /Unauthorized: caller 0xImpersonator is not authorized/
   );
 
   // Position remains intact
   assert.equal(engine.listPositions().length, 1);
 });
 
-test("Negative Control 6: Premature duplicate funding settlement in same epoch is skipped without double-charging", () => {
-  const clock = new DeterministicClock(1_700_000_000_000);
-  const engine = new DerivativesEngine(clock);
-  engine.registerMarket(ADMIN_AUTH, "ETH-USD", 3000n * WAD, 500n, 0n);
+test("Negative Control 6: Premature duplicate funding settlement does not double-charge traders", () => {
+  const startTime = 1_000_000_000_000;
+  const engine = new DerivativesEngine();
+  engine.registerMarket("ETH-USD", 3000n * WAD, 500n, 0n, startTime);
 
-  engine.openPosition(USER_AUTH, {
-    account: "0xUser",
+  engine.openPosition({
+    account: "0xTrader",
     symbol: "ETH-USD",
     isLong: true,
     size: 1n * WAD,
@@ -119,9 +115,9 @@ test("Negative Control 6: Premature duplicate funding settlement in same epoch i
     leverage: 10n
   });
 
-  // Premature settlement attempt (clock has not advanced to next 8-hour epoch)
-  const res = engine.settleFunding("ETH-USD");
-  assert.equal(res.status, "SKIPPED_DUPLICATE_EPOCH");
+  // Premature settlement attempt after only 5 minutes
+  const res = engine.settleFunding("ETH-USD", startTime + (5 * 60 * 1000));
+  assert.equal(res.status, "SKIPPED_INTERVAL_NOT_ELAPSED");
   assert.equal(res.settledPositions, 0);
 
   // Accrued funding remains 0
