@@ -26,14 +26,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: elon00/qmoosa-derivatives-engine
-          ref: a184fb0a9822c3dc7ff29b74ea004e110daecd03
+          ref: 090849ea56f23174fc43bf34a67525d272f8914c
           path: qmoosa-derivatives-engine
 
       - name: Checkout sdk repository (Pinned Commit)
         uses: actions/checkout@v4
         with:
           repository: elon00/qmoosa-derivatives-sdk
-          ref: b3f8e25b566c5526afba12e6d28c501889bf29c2
+          ref: f8c8645cdc504269c1aedb8b38bbdd0ba26c87a9
           path: qmoosa-derivatives-sdk
 
       - name: Setup Node.js
@@ -57,7 +57,11 @@ jobs:
         working-directory: qmoosa-derivatives-tests
         run: npm run verify:archive
 
-      - name: Run Source & Package Integrity Gate (Full Fail-Closed Gate)
+      - name: Run Strict Current-HEAD Alignment Gate
+        working-directory: qmoosa-derivatives-tests
+        run: npm run verify:current-head
+
+      - name: Run Source & Package Integrity Gate (Full Fail-Closed & Canonical Comparison)
         working-directory: qmoosa-derivatives-tests
         run: npm run test:integrity
 

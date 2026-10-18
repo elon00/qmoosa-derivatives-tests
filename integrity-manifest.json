@@ -1,6 +1,6 @@
 {
   "mission": "QMOOSA-DERIVATIVES-01",
-  "generatedAt": "2026-10-18T09:36:00Z",
+  "generatedAt": "2026-10-18T10:05:00Z",
   "packages": [
     {
       "name": "@qmoosa/derivatives-protocol",
@@ -14,17 +14,17 @@
       "name": "@qmoosa/derivatives-engine",
       "version": "1.0.0",
       "archivePath": "packages/qmoosa-derivatives-engine-1.0.0.tgz",
-      "sha256": "d5450e5d402d995c2273d7b6d9c2f24706010fba2c94cfb2eac6b3a374b9c27c",
+      "sha256": "114e83ebc36781213e4f0cd216845cd2d16522d93aedf2b9f5138184d72c787f",
       "repository": "elon00/qmoosa-derivatives-engine",
-      "sourceCommit": "a184fb0a9822c3dc7ff29b74ea004e110daecd03"
+      "sourceCommit": "090849ea56f23174fc43bf34a67525d272f8914c"
     },
     {
       "name": "@qmoosa/derivatives-sdk",
       "version": "1.0.0",
       "archivePath": "packages/qmoosa-derivatives-sdk-1.0.0.tgz",
-      "sha256": "d1849a95d1eddc6e46793a7156d099d8c3aca7e9c14d46c5eb5b9db75b1071ba",
+      "sha256": "029a2a6e8ac7c6782e18659014ecfe58a70aa01fd723052daf9ad6a56c288584",
       "repository": "elon00/qmoosa-derivatives-sdk",
-      "sourceCommit": "b3f8e25b566c5526afba12e6d28c501889bf29c2"
+      "sourceCommit": "f8c8645cdc504269c1aedb8b38bbdd0ba26c87a9"
     }
   ]
 }

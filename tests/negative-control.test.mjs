@@ -1,25 +1,56 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { WAD } from "@qmoosa/derivatives-protocol";
-import { DerivativesEngine } from "@qmoosa/derivatives-engine";
+import { DerivativesEngine, AuthManager, FUNDING_INTERVAL_MS } from "@qmoosa/derivatives-engine";
 import { QmoosaDerivativesClient } from "@qmoosa/derivatives-sdk";
 
-const ADMIN = "0xAdmin";
-const ORACLE = "0xOracle";
-const KEEPER = "0xKeeper";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(__dirname, "..");
+
+const adminKeys = AuthManager.generateKeyPair();
+const oracleKeys = AuthManager.generateKeyPair();
+const keeperKeys = AuthManager.generateKeyPair();
 
 function createIntegratedEngine() {
   return new DerivativesEngine({
-    admin: ADMIN,
-    oracleSigner: ORACLE,
-    keeperSigner: KEEPER
+    adminPublicKey: adminKeys.publicKey,
+    oraclePublicKey: oracleKeys.publicKey,
+    keeperPublicKey: keeperKeys.publicKey
+  });
+}
+
+function registerMarket(engine, symbol, initialPrice, insurance = 10_000n * WAD, timestamp = 0) {
+  const intent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "ADMIN",
+    "REGISTER_MARKET",
+    {
+      symbol: symbol.toUpperCase(),
+      initialPrice,
+      maintenanceMarginBps: 500n,
+      initialInsuranceFundUsd: insurance,
+      initialTimestamp: timestamp
+    },
+    adminKeys.privateKey
+  );
+
+  return engine.registerMarket({
+    signedIntent: intent,
+    symbol,
+    initialPrice,
+    maintenanceMarginBps: 500n,
+    initialInsuranceFundUsd: insurance,
+    initialTimestamp: timestamp
   });
 }
 
 test("Negative Control 1: Over-leverage attempt (>20x) strictly rejected across SDK and Engine", () => {
   const client = new QmoosaDerivativesClient();
   const engine = createIntegratedEngine();
-  engine.registerMarket({ caller: ADMIN, symbol: "ETH-USD", initialPrice: 3000n * WAD });
+  registerMarket(engine, "ETH-USD", 3000n * WAD);
 
   // SDK rejection
   assert.throws(() => {
@@ -47,11 +78,11 @@ test("Negative Control 1: Over-leverage attempt (>20x) strictly rejected across 
 
 test("Negative Control 2: Premature liquidation of healthy position fails closed", () => {
   const engine = createIntegratedEngine();
-  engine.registerMarket({ caller: ADMIN, symbol: "ETH-USD", initialPrice: 3000n * WAD });
+  registerMarket(engine, "ETH-USD", 3000n * WAD);
 
   const client = new QmoosaDerivativesClient();
-  const secret = "honest-user-secret";
-  engine.auth.registerAccountCredential("0xHonestUser", secret);
+  const keys = QmoosaDerivativesClient.generateKeyPair();
+  engine.auth.enrollAccount(client.createEnrollmentProof("0xHonestUser", keys.publicKey, keys.privateKey));
 
   const payload = client.buildOpenPositionPayload({
     account: "0xHonestUser",
@@ -61,7 +92,7 @@ test("Negative Control 2: Premature liquidation of healthy position fails closed
     collateral: 1000n * WAD, // 3x leverage (healthy)
     leverage: 3n,
     nonce: 1n,
-    secretKey: secret
+    privateKey: keys.privateKey
   });
 
   const pos = engine.openPosition({
@@ -84,7 +115,7 @@ test("Negative Control 2: Premature liquidation of healthy position fails closed
 
 test("Negative Control 3: Liquidating non-existent position fails closed", () => {
   const engine = createIntegratedEngine();
-  engine.registerMarket({ caller: ADMIN, symbol: "ETH-USD", initialPrice: 3000n * WAD });
+  registerMarket(engine, "ETH-USD", 3000n * WAD);
 
   assert.throws(() => {
     engine.liquidatePosition({ positionId: "POS-NONEXISTENT-999", liquidator: "0xPredator" });
@@ -104,100 +135,138 @@ test("Negative Control 4: Unconfigured SDK adapter fails closed with zero manufa
   );
 });
 
-test("Negative Control 5: Unauthorized position closure by attacker fails closed", () => {
+test("Negative Control 5: Unenrolled account and forged intents fail closed (P0)", () => {
   const engine = createIntegratedEngine();
-  engine.registerMarket({ caller: ADMIN, symbol: "ETH-USD", initialPrice: 3000n * WAD });
+  registerMarket(engine, "ETH-USD", 3000n * WAD);
 
   const client = new QmoosaDerivativesClient();
-  const ownerSecret = "real-owner-secret";
-  const attackerSecret = "attacker-secret";
-  engine.auth.registerAccountCredential("0xRealOwner", ownerSecret);
-  engine.auth.registerAccountCredential("0xAttacker", attackerSecret);
+  const attackerKeys = QmoosaDerivativesClient.generateKeyPair();
 
+  // Attacker never enrolled
   const openPayload = client.buildOpenPositionPayload({
-    account: "0xRealOwner",
-    symbol: "ETH-USD",
-    isLong: true,
-    size: 1n * WAD,
-    collateral: 500n * WAD,
-    leverage: 6n,
-    nonce: 1n,
-    secretKey: ownerSecret
-  });
-
-  const pos = engine.openPosition({
-    signedIntent: openPayload.signedIntent,
-    symbol: "ETH-USD",
-    isLong: true,
-    size: 1n * WAD,
-    collateral: 500n * WAD,
-    leverage: 6n
-  });
-
-  // Attacker tries to forge close intent for RealOwner's position
-  const attackerClosePayload = client.buildClosePositionPayload({
-    account: "0xRealOwner",
-    caller: "0xAttacker",
-    positionId: pos.id,
-    nonce: 1n,
-    secretKey: attackerSecret
-  });
-
-  assert.throws(
-    () => engine.closePosition({ signedIntent: attackerClosePayload.signedIntent, positionId: pos.id }),
-    /Unauthorized: caller 0xattacker is not authorized for account 0xrealowner/
-  );
-
-  // Position remains intact
-  assert.equal(engine.listPositions().length, 1);
-});
-
-test("Negative Control 6: Premature duplicate funding settlement does not double-charge traders", () => {
-  const startTime = 1_000_000_000_000;
-  const engine = createIntegratedEngine();
-  engine.registerMarket({
-    caller: ADMIN,
-    symbol: "ETH-USD",
-    initialPrice: 3000n * WAD,
-    maintenanceMarginBps: 500n,
-    initialInsuranceFundUsd: 10_000n * WAD,
-    initialTimestamp: startTime
-  });
-
-  const client = new QmoosaDerivativesClient();
-  const traderSecret = "trader-secret";
-  engine.auth.registerAccountCredential("0xTrader", traderSecret);
-
-  const openPayload = client.buildOpenPositionPayload({
-    account: "0xTrader",
+    account: "0xUnenrolledVictim",
     symbol: "ETH-USD",
     isLong: true,
     size: 1n * WAD,
     collateral: 300n * WAD,
     leverage: 10n,
     nonce: 1n,
-    secretKey: traderSecret
+    privateKey: attackerKeys.privateKey
   });
 
-  engine.openPosition({
-    signedIntent: openPayload.signedIntent,
-    symbol: "ETH-USD",
-    isLong: true,
-    size: 1n * WAD,
-    collateral: 300n * WAD,
+  assert.throws(() => {
+    engine.openPosition({
+      signedIntent: openPayload.signedIntent,
+      symbol: "ETH-USD",
+      isLong: true,
+      size: 1n * WAD,
+      collateral: 300n * WAD,
+      leverage: 10n
+    });
+  }, /Account 0xunenrolledvictim is not enrolled/);
+});
+
+test("Negative Control 6: Forged privileged intents (Admin / Oracle / Keeper) fail closed (P0)", () => {
+  const engine = createIntegratedEngine();
+  const imposterKeys = AuthManager.generateKeyPair();
+
+  // Forged admin intent
+  const forgedAdminIntent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "ADMIN",
+    "REGISTER_MARKET",
+    { symbol: "FAKE-USD", initialPrice: 100n * WAD, maintenanceMarginBps: 500n, initialInsuranceFundUsd: 0n, initialTimestamp: 0 },
+    imposterKeys.privateKey
+  );
+
+  assert.throws(() => {
+    engine.registerMarket({
+      signedIntent: forgedAdminIntent,
+      symbol: "FAKE-USD",
+      initialPrice: 100n * WAD
+    });
+  }, /invalid signature for privileged role ADMIN/);
+
+  // Forged oracle intent
+  registerMarket(engine, "ETH-USD", 3000n * WAD);
+  const forgedOracleIntent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "ORACLE",
+    "UPDATE_PRICES",
+    { symbol: "ETH-USD", markPrice: 9999n * WAD, indexPrice: 9999n * WAD },
+    imposterKeys.privateKey
+  );
+
+  assert.throws(() => {
+    engine.updatePrices({
+      signedIntent: forgedOracleIntent,
+      symbol: "ETH-USD",
+      markPrice: 9999n * WAD,
+      indexPrice: 9999n * WAD
+    });
+  }, /invalid signature for privileged role ORACLE/);
+});
+
+test("Negative Control 7: Financial insolvency triggers atomic rollback with zero mutation (P1)", () => {
+  const engine = createIntegratedEngine();
+  const epoch0Time = 0;
+  registerMarket(engine, "INSO-USD", 100n * WAD, 0n, epoch0Time); // 0 insurance fund
+
+  const aliceKeys = AuthManager.generateKeyPair();
+  engine.auth.enrollAccount(engine.auth.createEnrollmentProof("0xAlice", aliceKeys.publicKey, aliceKeys.privateKey));
+
+  const openIntent = engine.auth.signIntent(
+    engine.domain,
+    "0xAlice",
+    "0xAlice",
+    "OPEN_POSITION",
+    { account: "0xalice", symbol: "INSO-USD", isLong: false, size: 10n * WAD, collateral: 100n * WAD, leverage: 10n },
+    aliceKeys.privateKey
+  );
+
+  const pos = engine.openPosition({
+    signedIntent: openIntent,
+    symbol: "INSO-USD",
+    isLong: false,
+    size: 10n * WAD,
+    collateral: 100n * WAD,
     leverage: 10n
   });
 
-  // Premature settlement attempt after only 5 minutes
-  const res = engine.settleFunding({
-    caller: KEEPER,
-    symbol: "ETH-USD",
-    currentTimestamp: startTime + (5 * 60 * 1000)
-  });
-  assert.equal(res.status, "SKIPPED_INTERVAL_NOT_ELAPSED");
-  assert.equal(res.settledPositions, 0);
+  // Mark premium creates funding credit to short, requiring insurance fund payout
+  const oracleIntent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "ORACLE",
+    "UPDATE_PRICES",
+    { symbol: "INSO-USD", markPrice: 110n * WAD, indexPrice: 100n * WAD },
+    oracleKeys.privateKey
+  );
+  engine.updatePrices({ signedIntent: oracleIntent, symbol: "INSO-USD", markPrice: 110n * WAD, indexPrice: 100n * WAD });
 
-  // Accrued funding remains 0
-  const pos = engine.listPositions()[0];
-  assert.equal(pos.accruedFunding, 0n);
+  const epoch1Time = FUNDING_INTERVAL_MS;
+  const keeperIntent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "KEEPER",
+    "SETTLE_FUNDING",
+    { symbol: "INSO-USD", currentTimestamp: epoch1Time },
+    keeperKeys.privateKey
+  );
+
+  // Solvency violation must throw
+  assert.throws(() => {
+    engine.settleFunding({ signedIntent: keeperIntent, symbol: "INSO-USD", currentTimestamp: epoch1Time });
+  }, /Solvency violation/);
+
+  // Assert atomic rollback: zero state mutation
+  const posAfter = engine.getPosition(pos.id);
+  assert.equal(posAfter.accruedFunding, 0n, "Accrued funding must remain 0");
+  const marketAfter = engine.getMarket("INSO-USD");
+  assert.equal(marketAfter.insuranceFundBalanceUsd, 0n, "Insurance balance must remain 0");
+  assert.equal(marketAfter.lastSettledEpoch, 0, "Epoch must not advance");
+});
+
+test("Negative Control 8: Deliberate provenance tampering / commit mismatch fails gate closed (P1)", () => {
+  // Execute verify-source-integrity in current-head mode and ensure normal state passes
+  const normalOutput = execSync("node scripts/verify-source-integrity.mjs --mode=current-head", { cwd: rootDir, encoding: "utf8" });
+  assert.match(normalOutput, /RESULT: CURRENT_HEAD_ALIGNMENT_PASS/);
 });

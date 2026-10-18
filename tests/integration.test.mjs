@@ -8,30 +8,58 @@ import {
   calculateEquity,
   isLiquidatable
 } from "@qmoosa/derivatives-protocol";
-import { DerivativesEngine, FUNDING_INTERVAL_MS } from "@qmoosa/derivatives-engine";
+import { DerivativesEngine, AuthManager, FUNDING_INTERVAL_MS } from "@qmoosa/derivatives-engine";
 import { QmoosaDerivativesClient } from "@qmoosa/derivatives-sdk";
 
-const ADMIN = "0xAdmin";
-const ORACLE = "0xOracle";
-const KEEPER = "0xKeeper";
+const adminKeys = AuthManager.generateKeyPair();
+const oracleKeys = AuthManager.generateKeyPair();
+const keeperKeys = AuthManager.generateKeyPair();
 
 function createIntegratedEngine() {
   return new DerivativesEngine({
-    admin: ADMIN,
-    oracleSigner: ORACLE,
-    keeperSigner: KEEPER
+    adminPublicKey: adminKeys.publicKey,
+    oraclePublicKey: oracleKeys.publicKey,
+    keeperPublicKey: keeperKeys.publicKey
   });
 }
 
-test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlement)", () => {
+function registerMarket(engine, symbol, initialPrice, insurance = 100_000n * WAD, timestamp = 0) {
+  const intent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "ADMIN",
+    "REGISTER_MARKET",
+    {
+      symbol: symbol.toUpperCase(),
+      initialPrice,
+      maintenanceMarginBps: 500n,
+      initialInsuranceFundUsd: insurance,
+      initialTimestamp: timestamp
+    },
+    adminKeys.privateKey
+  );
+
+  return engine.registerMarket({
+    signedIntent: intent,
+    symbol,
+    initialPrice,
+    maintenanceMarginBps: 500n,
+    initialInsuranceFundUsd: insurance,
+    initialTimestamp: timestamp
+  });
+}
+
+test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlement with Ed25519 Asymmetric Auth)", () => {
   const engine = createIntegratedEngine();
-  engine.registerMarket({ caller: ADMIN, symbol: "ETH-USD", initialPrice: 3000n * WAD });
+  registerMarket(engine, "ETH-USD", 3000n * WAD);
 
   const client = new QmoosaDerivativesClient();
-  const aliceSecret = "alice-super-secret-key-12345";
-  engine.auth.registerAccountCredential("0xAlice", aliceSecret);
+  const aliceKeys = QmoosaDerivativesClient.generateKeyPair();
 
-  // Build open payload with SDK, supplying secretKey to generate domain-bound SignedIntent
+  // Verifiable account enrollment with asymmetric ownership proof
+  const proof = client.createEnrollmentProof("0xAlice", aliceKeys.publicKey, aliceKeys.privateKey);
+  engine.auth.enrollAccount(proof);
+
+  // Build open payload with SDK, supplying Ed25519 privateKey to generate domain-bound SignedIntent
   const openPayload = client.buildOpenPositionPayload({
     account: "0xAlice",
     symbol: "ETH-USD",
@@ -40,7 +68,7 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
     collateral: 600n * WAD, // 10x leverage on $6,000 notional
     leverage: 10n,
     nonce: 1n,
-    secretKey: aliceSecret
+    privateKey: aliceKeys.privateKey
   });
 
   assert.ok(openPayload.signedIntent, "SDK must generate signed intent");
@@ -58,15 +86,22 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
   assert.equal(position.size, 2n * WAD);
   assert.equal(position.collateral, 600n * WAD);
 
-  // Market rallies to $3300 (+10% gain) - Oracle updates mark price
-  engine.updatePrices({ caller: ORACLE, symbol: "ETH-USD", markPrice: 3300n * WAD, indexPrice: 3300n * WAD });
+  // Market rallies to $3300 (+10% gain) - Oracle updates mark price with signed intent
+  const oracleIntent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "ORACLE",
+    "UPDATE_PRICES",
+    { symbol: "ETH-USD", markPrice: 3300n * WAD, indexPrice: 3300n * WAD },
+    oracleKeys.privateKey
+  );
+  engine.updatePrices({ signedIntent: oracleIntent, symbol: "ETH-USD", markPrice: 3300n * WAD, indexPrice: 3300n * WAD });
 
   // Build close payload with SDK
   const closePayload = client.buildClosePositionPayload({
     account: "0xAlice",
     positionId: position.id,
     nonce: 2n,
-    secretKey: aliceSecret
+    privateKey: aliceKeys.privateKey
   });
 
   assert.ok(closePayload.signedIntent, "SDK must generate signed intent for position closure");
@@ -85,18 +120,11 @@ test("1. End-to-End Long Position Lifecycle (SDK -> Engine -> Protocol Settlemen
 test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and Insurance Balance", () => {
   const startTime = 1_000_000_000_000;
   const engine = createIntegratedEngine();
-  engine.registerMarket({
-    caller: ADMIN,
-    symbol: "BTC-USD",
-    initialPrice: 60000n * WAD,
-    maintenanceMarginBps: 500n,
-    initialInsuranceFundUsd: 100_000n * WAD,
-    initialTimestamp: startTime
-  });
+  registerMarket(engine, "BTC-USD", 60000n * WAD, 100_000n * WAD, startTime);
 
   const client = new QmoosaDerivativesClient();
-  const bobSecret = "bob-super-secret-key-67890";
-  engine.auth.registerAccountCredential("0xBob", bobSecret);
+  const bobKeys = QmoosaDerivativesClient.generateKeyPair();
+  engine.auth.enrollAccount(client.createEnrollmentProof("0xBob", bobKeys.publicKey, bobKeys.privateKey));
 
   const openPayload = client.buildOpenPositionPayload({
     account: "0xBob",
@@ -106,7 +134,7 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and
     collateral: 6000n * WAD, // 10x leverage on $60,000 notional
     leverage: 10n,
     nonce: 1n,
-    secretKey: bobSecret
+    privateKey: bobKeys.privateKey
   });
 
   const position = engine.openPosition({
@@ -119,13 +147,28 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and
   });
 
   // Mark price trades above Index ($60600 vs $60000 = +100 bps premium)
-  engine.updatePrices({ caller: ORACLE, symbol: "BTC-USD", markPrice: 60600n * WAD, indexPrice: 60000n * WAD });
+  const oracleIntent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "ORACLE",
+    "UPDATE_PRICES",
+    { symbol: "BTC-USD", markPrice: 60600n * WAD, indexPrice: 60000n * WAD },
+    oracleKeys.privateKey
+  );
+  engine.updatePrices({ signedIntent: oracleIntent, symbol: "BTC-USD", markPrice: 60600n * WAD, indexPrice: 60000n * WAD });
   const market = engine.getMarket("BTC-USD");
   assert.equal(market.fundingRateBps, 100n);
 
-  // Settle funding cycle after full 8 hours
+  // Settle funding cycle after full 8 hours with Keeper signed intent
+  const keeperIntent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "KEEPER",
+    "SETTLE_FUNDING",
+    { symbol: "BTC-USD", currentTimestamp: startTime + FUNDING_INTERVAL_MS },
+    keeperKeys.privateKey
+  );
+
   const settlement = engine.settleFunding({
-    caller: KEEPER,
+    signedIntent: keeperIntent,
     symbol: "BTC-USD",
     currentTimestamp: startTime + FUNDING_INTERVAL_MS
   });
@@ -141,24 +184,23 @@ test("2. End-to-End Short Position Lifecycle with Dynamic Funding Settlement and
     account: "0xBob",
     positionId: position.id,
     nonce: 2n,
-    secretKey: bobSecret
+    privateKey: bobKeys.privateKey
   });
 
   const receipt = engine.closePosition({
     signedIntent: closePayload.signedIntent,
     positionId: position.id
   });
-  // Payout includes original collateral minus slight price change plus funding credit
   assert.ok(receipt.finalPayout > 0n);
 });
 
 test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () => {
   const engine = createIntegratedEngine();
-  engine.registerMarket({ caller: ADMIN, symbol: "SOL-USD", initialPrice: 200n * WAD });
+  registerMarket(engine, "SOL-USD", 200n * WAD);
 
   const client = new QmoosaDerivativesClient();
-  const charlieSecret = "charlie-super-secret-key-11111";
-  engine.auth.registerAccountCredential("0xCharlie", charlieSecret);
+  const charlieKeys = QmoosaDerivativesClient.generateKeyPair();
+  engine.auth.enrollAccount(client.createEnrollmentProof("0xCharlie", charlieKeys.publicKey, charlieKeys.privateKey));
 
   // Max leverage 20x: 10 SOL at $200 = $2,000 notional. Collateral = $100
   const openPayload = client.buildOpenPositionPayload({
@@ -169,7 +211,7 @@ test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () =>
     collateral: 100n * WAD,
     leverage: 20n,
     nonce: 1n,
-    secretKey: charlieSecret
+    privateKey: charlieKeys.privateKey
   });
 
   const position = engine.openPosition({
@@ -181,8 +223,15 @@ test("3. End-to-End Liquidation Cascade and Liquidator Reward Settlement", () =>
     leverage: openPayload.leverage
   });
 
-  // Price drops by 4.5% to $191.00 -> triggers liquidation (Oracle updates price)
-  engine.updatePrices({ caller: ORACLE, symbol: "SOL-USD", markPrice: 191n * WAD, indexPrice: 191n * WAD });
+  // Price drops by 4.5% to $191.00 -> triggers liquidation (Oracle updates price with signed intent)
+  const oracleIntent = engine.auth.signPrivilegedIntent(
+    engine.domain,
+    "ORACLE",
+    "UPDATE_PRICES",
+    { symbol: "SOL-USD", markPrice: 191n * WAD, indexPrice: 191n * WAD },
+    oracleKeys.privateKey
+  );
+  engine.updatePrices({ signedIntent: oracleIntent, symbol: "SOL-USD", markPrice: 191n * WAD, indexPrice: 191n * WAD });
 
   // SDK builds liquidate payload
   const liqPayload = client.buildLiquidatePayload({
