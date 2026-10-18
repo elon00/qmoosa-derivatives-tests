@@ -43,6 +43,12 @@ jobs:
           cache: 'npm'
           cache-dependency-path: qmoosa-derivatives-tests/package-lock.json
 
+      - name: Install dependencies in sibling repositories
+        run: |
+          npm ci --prefix qmoosa-derivatives-protocol
+          npm ci --prefix qmoosa-derivatives-engine
+          npm ci --prefix qmoosa-derivatives-sdk
+
       - name: Install dependencies in tests repository
         working-directory: qmoosa-derivatives-tests
         run: npm install

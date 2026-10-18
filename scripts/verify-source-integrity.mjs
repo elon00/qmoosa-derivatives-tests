@@ -124,6 +124,8 @@ if (mode === "all" || mode === "source" || mode === "rebuild") {
       console.log(`  [PASS] ${pkg.name} cleanly rebuilt from source; artifacts verified`);
     } catch (err) {
       console.error(`  [FAIL] Rebuild failed for ${pkg.name}: ${err.message}`);
+      if (err.stdout) console.error(`         stdout: ${err.stdout.toString()}`);
+      if (err.stderr) console.error(`         stderr: ${err.stderr.toString()}`);
       sourceProvenanceFailed = true;
     }
   }
