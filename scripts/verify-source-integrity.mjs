@@ -25,7 +25,6 @@ console.log(`Manifest: Generated ${manifest.generatedAt}`);
 console.log(`================================================================\n`);
 
 let archiveIntegrityFailed = false;
-let sourceProvenanceBlocked = false;
 let sourceProvenanceFailed = false;
 
 // GATE 1: ARCHIVE INTEGRITY VERIFICATION
@@ -65,20 +64,15 @@ if (mode === "archive" || mode === "all" || mode === "source") {
   }
 }
 
-// GATE 2: SOURCE PROVENANCE VERIFICATION
+// GATE 2: STRICT FAIL-CLOSED SOURCE PROVENANCE VERIFICATION
 console.log(`--- [GATE 2: SOURCE PROVENANCE VERIFICATION] ---`);
 for (const pkg of manifest.packages) {
   const repoBaseName = pkg.repository.split("/")[1];
   const siblingPath = path.resolve(rootDir, "..", repoBaseName);
 
   if (!fs.existsSync(siblingPath) || !fs.existsSync(path.join(siblingPath, ".git"))) {
-    if (mode === "source") {
-      console.error(`  [FAIL] Sibling repository checkout required but missing: ${pkg.repository}`);
-      sourceProvenanceFailed = true;
-    } else {
-      console.log(`  [BLOCKED] Sibling repository checkout unavailable for ${pkg.repository}.`);
-      sourceProvenanceBlocked = true;
-    }
+    console.error(`  [FAIL] Strict reality-gate failure: sibling repository checkout required but missing: ${pkg.repository}`);
+    sourceProvenanceFailed = true;
     continue;
   }
 
@@ -105,15 +99,22 @@ for (const pkg of manifest.packages) {
 }
 
 if (mode === "current-head") {
-  process.exit(0);
+  process.exit(sourceProvenanceFailed ? 1 : 0);
 }
 
-// GATE 3: REPRODUCIBLE REBUILD VERIFICATION
-if (!sourceProvenanceBlocked && (mode === "all" || mode === "source" || mode === "rebuild")) {
+// GATE 3: REPRODUCIBLE REBUILD INTEGRITY VERIFICATION
+if (mode === "all" || mode === "source" || mode === "rebuild") {
   console.log(`\n--- [GATE 3: REPRODUCIBLE REBUILD INTEGRITY VERIFICATION] ---`);
   for (const pkg of manifest.packages) {
     const repoBaseName = pkg.repository.split("/")[1];
     const siblingPath = path.resolve(rootDir, "..", repoBaseName);
+
+    if (!fs.existsSync(siblingPath)) {
+      console.error(`  [FAIL] Cannot rebuild: sibling path ${siblingPath} does not exist`);
+      sourceProvenanceFailed = true;
+      continue;
+    }
+
     try {
       execSync("npm run build", { cwd: siblingPath, stdio: "pipe" });
       const distPath = path.join(siblingPath, "dist");
@@ -129,10 +130,8 @@ if (!sourceProvenanceBlocked && (mode === "all" || mode === "source" || mode ===
 }
 
 if (sourceProvenanceFailed) {
-  console.error("\nRESULT: SOURCE_PROVENANCE_FAIL");
+  console.error("\nRESULT: SOURCE_PROVENANCE_FAIL (Fail-closed security gate triggered)");
   process.exit(1);
-} else if (sourceProvenanceBlocked) {
-  console.log("\nRESULT: SOURCE_PROVENANCE_BLOCKED (Hermetic single-repo checkout)");
 } else {
-  console.log("\nRESULT: SOURCE_PROVENANCE_PASS (100% Source derivation verified)");
+  console.log("\nRESULT: SOURCE_PROVENANCE_PASS (100% Hermetic source derivation verified)");
 }

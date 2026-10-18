@@ -12,27 +12,57 @@ jobs:
     steps:
       - name: Checkout tests repository
         uses: actions/checkout@v4
+        with:
+          path: qmoosa-derivatives-tests
+
+      - name: Checkout protocol repository (Pinned Commit)
+        uses: actions/checkout@v4
+        with:
+          repository: elon00/qmoosa-derivatives-protocol
+          ref: da834143dfe517f96646eebb0d7a6d21729511b9
+          path: qmoosa-derivatives-protocol
+
+      - name: Checkout engine repository (Pinned Commit)
+        uses: actions/checkout@v4
+        with:
+          repository: elon00/qmoosa-derivatives-engine
+          ref: a184fb0a9822c3dc7ff29b74ea004e110daecd03
+          path: qmoosa-derivatives-engine
+
+      - name: Checkout sdk repository (Pinned Commit)
+        uses: actions/checkout@v4
+        with:
+          repository: elon00/qmoosa-derivatives-sdk
+          ref: b3f8e25b566c5526afba12e6d28c501889bf29c2
+          path: qmoosa-derivatives-sdk
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: 'npm'
+          cache-dependency-path: qmoosa-derivatives-tests/package-lock.json
 
-      - name: Install dependencies with strict lockfile
+      - name: Install dependencies in tests repository
+        working-directory: qmoosa-derivatives-tests
         run: npm install
 
       - name: Run Source & Package Integrity Gate (Archive Mode)
+        working-directory: qmoosa-derivatives-tests
         run: npm run verify:archive
 
-      - name: Run Source & Package Integrity Gate (Full Gate)
+      - name: Run Source & Package Integrity Gate (Full Fail-Closed Gate)
+        working-directory: qmoosa-derivatives-tests
         run: npm run test:integrity
 
       - name: Run Real Cross-Repository Integration Suite
+        working-directory: qmoosa-derivatives-tests
         run: npm run test:integration
 
       - name: Run Negative Control & Adversarial Defense Suite
+        working-directory: qmoosa-derivatives-tests
         run: npm run test:negative
 
       - name: Run Static Syntax & Lint Verification
+        working-directory: qmoosa-derivatives-tests
         run: npm run lint
